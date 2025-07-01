@@ -1,60 +1,71 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <cstring>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <cstring>
 
-#define PORT 5000
+#define VECTOR_SIZE 10566
 #define SERVER_IP "127.0.0.1"
-
-std::vector<double> load_vector_from_file(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    file.seekg(0, std::ios::end);
-    size_t size = file.tellg() / sizeof(double);
-    file.seekg(0);
-    std::vector<double> vec(size);
-    file.read(reinterpret_cast<char*>(vec.data()), size * sizeof(double));
-    return vec;
-}
-
-void save_vector_to_file(const std::string& filename, const std::vector<double>& vec) {
-    std::ofstream file(filename, std::ios::binary);
-    file.write(reinterpret_cast<const char*>(vec.data()), vec.size() * sizeof(double));
-}
+#define SERVER_PORT 12345
 
 int main() {
+    // Leer vector desde archivo binario
+    std::ifstream infile("model_vector.bin", std::ios::binary);
+    if (!infile) {
+        std::cerr << "No se pudo abrir model_vector.bin\n";
+        return 1;
+    }
+
+    std::vector<float> vec(VECTOR_SIZE);
+    infile.read(reinterpret_cast<char*>(vec.data()), VECTOR_SIZE * sizeof(float));
+    infile.close();
+
+    // Crear socket
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        std::cerr << "Error al crear socket\n";
+        perror("Socket error");
         return 1;
     }
 
-    sockaddr_in serv_addr{};
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
+    sockaddr_in server_addr{};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(SERVER_PORT);
+    inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
 
-    if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
-        std::cerr << "Dirección inválida\n";
+    if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connect error");
         return 1;
     }
 
-    if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-        std::cerr << "Conexión fallida\n";
-        return 1;
+    // Enviar vector
+    send(sock, vec.data(), VECTOR_SIZE * sizeof(float), 0);
+
+    // Recibir vector promedio
+    std::vector<float> avg_vec(VECTOR_SIZE);
+    size_t total_received = 0;
+    while (total_received < avg_vec.size() * sizeof(float)) {
+        ssize_t bytes = recv(sock,
+                             reinterpret_cast<char*>(avg_vec.data()) + total_received,
+                             avg_vec.size() * sizeof(float) - total_received,
+                             0);
+        if (bytes <= 0) {
+            perror("Receive error");
+            close(sock);
+            return 1;
+        }
+        total_received += bytes;
     }
 
-    std::vector<double> vec = load_vector_from_file("model_vector.bin");
-    int32_t vec_size = vec.size();
-    send(sock, &vec_size, sizeof(int32_t), 0);
-    send(sock, vec.data(), vec_size * sizeof(double), 0);
-
-    recv(sock, &vec_size, sizeof(int32_t), 0);
-    std::vector<double> received(vec_size);
-    recv(sock, received.data(), vec_size * sizeof(double), 0);
-
-    save_vector_to_file("averaged_vector.bin", received);
-    std::cout << "Cliente finalizado.\n";
     close(sock);
+
+    // Mostrar primeros 10 elementos recibidos
+    std::cout << "Vector promedio recibido (primeros 10 elementos):\n";
+    for (int i = 0; i < 10; ++i) {
+        std::cout << avg_vec[i] << " ";
+    }
+    std::cout << "\n";
+
     return 0;
 }
+
